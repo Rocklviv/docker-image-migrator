@@ -1,4 +1,4 @@
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 """
 DIM - Python based CLI for Docker images migration from Docker Registry V1 to V2 or AWS ECR.
 """
@@ -53,7 +53,7 @@ class DIM:
         urllib3.disable_warnings()
         try:
             self._log("DEBUG", "Getting list of images")
-            resp = http.request("GET", "https://{}/v1/search".format(self.src_url))
+            resp = http.request("GET", "https://{src}/v1/search".format(src=self.src_url))
             if resp.data:
                 data = json.loads(resp.data.decode('utf-8'))
                 for i in data.get('results'):
@@ -90,14 +90,19 @@ class DIM:
             self._log("DEBUG", "Pulling image {src}/{image}:{tag}".format(
                 src=self.src_url, image=image, tag=tag
             ))
-            img = client.pull("{}/{}".format(self.src_url, image))
+            img = client.pull("{src}/{image}:{tag}".format(
+                src=self.src_url, image=image, tag=tag
+            ))
             if img:
-                updated_image = client.tag("{}/{}".format(self.src_url, tag), "{}/{}".format(self.dest_url, image), tag=tag)
+                updated_image = client.tag("{src}/{image}".format(src=self.src_url, image=image), 
+                                            "{dest}/{image}".format(dest=self.dest_url, image=image),
+                                            tag
+                )
                 if updated_image:
                     try:
-                        client.push("{}/{}".format(self.dest_url, image), tag=tag)
-                        client.remove_image("{}/{}:{}".format(self.src_url, image, tag))
-                        client.remove_image("{}/{}:{}".format(self.dest_url, image, tag))
+                        client.push("{dest}/{image}".format(dest=self.dest_url, image=image), tag=tag)
+                        client.remove_image("{src}/{image}:{tag}".format(src=self.src_url, image=image, tag=tag))
+                        client.remove_image("{dest}/{image}:{tag}".format(dest=self.dest_url, image=image, tag=tag))
                         self._log("DEBUG", "Image {image} pushed to {dest} successfuly".format(
                             image=image, dest=self.dest_url
                         ))
@@ -126,7 +131,7 @@ class DIM:
                 data = json.loads((resp.data).decode('utf-8'))
                 return data
         except Exception as e:
-            print("[{:%Y-%m-%d %H:%M:%S}][ERROR] {}".format(self.current_time, e))
+            self._log("ERROR", "Error occured: {erro}".format(error=e))
             raise
 
     @staticmethod
