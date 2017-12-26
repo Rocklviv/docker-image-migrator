@@ -1,1 +1,3 @@
 docker[tls]
+python-terraform
+cryptography~=2.1.4

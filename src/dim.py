@@ -1,7 +1,8 @@
-__version__ = "0.1.1"
+__version__ = "0.2.1"
 """
 DIM - Python based CLI for Docker images migration from Docker Registry V1 to V2 or AWS ECR.
 """
+import sys
 import json
 from argparse import ArgumentParser
 from datetime import datetime
@@ -32,7 +33,7 @@ class DIM:
         parser.add_argument("--dest", required=True)
         parser.add_argument("--is-ecr", default=self.IS_AWS_ECR)
         self.args = parser.parse_args()
-        self._log("DEBUG", "Passed arguments to script: {}".format(self.current_time, self.args))
+        self._log("DEBUG", "Passed arguments to script: {}".format(self.args))
         self._log("DEBUG", "Parsing arguments")
         self.src_url = self.args.src
         self.dest_url = self.args.dest
@@ -67,7 +68,8 @@ class DIM:
                     self._pull_push_image(image, tag)
 
         except Exception as e:
-            self._log("ERROR", "Error occured: {e}".format(e))
+            self._log("ERROR", "Error occured: {error}".format(error=e))
+            raise
 
     def _pull_push_image(self, image, tag):
         """
@@ -84,8 +86,7 @@ class DIM:
 
             client = Client()
             if self.IS_AWS_ECR:
-                # Creating repository in AWS ECR if needed.
-                pass
+                self._create_ecr_repo(image)
 
             self._log("DEBUG", "Pulling image {src}/{image}:{tag}".format(
                 src=self.src_url, image=image, tag=tag
@@ -100,9 +101,20 @@ class DIM:
                 )
                 if updated_image:
                     try:
-                        client.push("{dest}/{image}".format(dest=self.dest_url, image=image), tag=tag)
-                        client.remove_image("{src}/{image}:{tag}".format(src=self.src_url, image=image, tag=tag))
-                        client.remove_image("{dest}/{image}:{tag}".format(dest=self.dest_url, image=image, tag=tag))
+                        push_result = client.push("{dest}/{image}".format(dest=self.dest_url,
+                                                                   image=image), tag=tag,
+                                                  insecure_registry=True)
+                        pr = self._check_docker_client_output(push_result)
+                        for key in pr:
+                            if key.get("error"):
+                                self._log("ERROR", "Cannot push to registry: {error}".format(
+                                            error=key.get("errorDetail")))
+                                sys.exit(1)
+
+                        client.remove_image("{src}/{image}:{tag}".format(
+                            src=self.src_url, image=image, tag=tag))
+                        client.remove_image("{dest}/{image}:{tag}".format(
+                            dest=self.dest_url, image=image, tag=tag))
                         self._log("DEBUG", "Image {image} pushed to {dest} successfuly".format(
                             image=image, dest=self.dest_url
                         ))
@@ -131,8 +143,38 @@ class DIM:
                 data = json.loads((resp.data).decode('utf-8'))
                 return data
         except Exception as e:
-            self._log("ERROR", "Error occured: {erro}".format(error=e))
+            self._log("ERROR", "Error occured: {error}".format(error=e))
             raise
+
+    def _create_ecr_repo(self, image):
+        try:
+            from python_terraform import Terraform
+            terraform = Terraform()
+            return_code, stdout, stderr = terraform.apply(var={"aws_ecr_name": image})
+            print(return_code)
+
+        except ImportError as e:
+            self._log("ERROR", "Import occured: {error}".format(error=e))
+            self._log("ERROR", "Try to install/reinstall python_terraform module.")
+            raise
+
+    # Static methods
+    @staticmethod
+    def _check_docker_client_output(output):
+        """
+        Checks docker client output on specific chars in response and returns list with dicts.
+        :param output: string Docker client output.
+        :return: list
+        """
+        updated_output = []
+        if output:
+            if type(output) == str:
+                if "\r\n" in output:
+                    tmp = output.split("\r\n")
+                    for key in tmp:
+                        if key != "":
+                            updated_output.append(json.loads(key))
+            return updated_output
 
     @staticmethod
     def _log(type, msg):
@@ -141,9 +183,17 @@ class DIM:
         :type: string Log level
         :msg: string Message to output
         """
-        current_time = datetime.now()
-        log_string = "[{:%Y-%m-%d %H:%M:%S}][{type}] {msg}".format(current_time, type=type, msg=msg)
-        print(log_string)
+        try:
+            from inspect import currentframe, getframeinfo
+
+            current_time = datetime.now()
+            current_frame = currentframe()
+            log_string = "[{:%Y-%m-%d %H:%M:%S}][{type}][{lineno}] - {msg}".format(
+                current_time, type=type, msg=msg, lineno=current_frame.f_back.f_lineno)
+            print(log_string)
+        except ImportError as e:
+            print("[CRITICAL] Cannot import inspect module: {error}".format(error=e))
+            raise
 
 if __name__ == "__main__":
     DIM()
