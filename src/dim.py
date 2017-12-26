@@ -96,14 +96,13 @@ class DIM:
             ))
             if img:
                 updated_image = client.tag("{src}/{image}".format(src=self.src_url, image=image), 
-                                            "{dest}/{image}".format(dest=self.dest_url, image=image),
-                                            tag
-                )
+                                           "{dest}/{image}".format(dest=self.dest_url,
+                                                                   image=image), tag)
                 if updated_image:
                     try:
                         push_result = client.push("{dest}/{image}".format(dest=self.dest_url,
-                                                                   image=image), tag=tag,
-                                                  insecure_registry=True)
+                                                                          image=image),
+                                                  tag=tag, insecure_registry=True)
                         pr = self._check_docker_client_output(push_result)
                         for key in pr:
                             if key.get("error"):
@@ -118,7 +117,8 @@ class DIM:
                         self._log("DEBUG", "Image {image} pushed to {dest} successfuly".format(
                             image=image, dest=self.dest_url
                         ))
-                        self._log("DEBUG", "Images {src}/{image}:{tag} and {dest}/{image}:{tag} removed successfuly".format(
+                        self._log("DEBUG", "Images {src}/{image}:{tag} and {dest}/"
+                                           "{image}:{tag} removed successfuly".format(
                             src=self.src_url, dest=self.dest_url, image=image, tag=tag
                         ))
                         return True
