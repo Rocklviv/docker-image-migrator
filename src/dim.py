@@ -68,7 +68,7 @@ class DIM:
                     self._pull_push_image(image, tag)
 
         except Exception as e:
-            self._log("ERROR", "Error occured: {error}".format(error=e))
+            self._log("ERROR", "Error occurred: {error}".format(error=e))
             raise
 
     def _pull_push_image(self, image, tag):
@@ -143,10 +143,15 @@ class DIM:
                 data = json.loads((resp.data).decode('utf-8'))
                 return data
         except Exception as e:
-            self._log("ERROR", "Error occured: {error}".format(error=e))
+            self._log("ERROR", "Error occurred: {error}".format(error=e))
             raise
 
     def _create_ecr_repo(self, image):
+        """
+        Creates AWS ECR using terraform.
+        :param image: string Image name that will be used as repository name.
+        :return:
+        """
         try:
             from python_terraform import Terraform
             terraform = Terraform()
@@ -195,5 +200,6 @@ class DIM:
             print("[CRITICAL] Cannot import inspect module: {error}".format(error=e))
             raise
 
-if __name__ == "__main__":
+
+def main():
     DIM()
