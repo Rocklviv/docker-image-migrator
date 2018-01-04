@@ -33,6 +33,9 @@ setup(
     url="",
     packages=["src"],
     install_requires=requirements(),
+    dependency_links=[
+      'https://github.com/beelit94/python-terraform.git@develop'
+    ],
     long_description=read(),
     classifiers=[
         "Development Status :: {} - Release".format(__version__),

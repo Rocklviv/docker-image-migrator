@@ -1,4 +1,4 @@
-__version__ = "0.2.1"
+__version__ = "0.2.3"
 """
 DIM - Python based CLI for Docker images migration from Docker Registry V1 to V2 or AWS ECR.
 """
@@ -53,10 +53,11 @@ class DIM:
         http = urllib3.PoolManager()
         urllib3.disable_warnings()
         try:
-            self._log("DEBUG", "Getting list of images")
+            self._log("INFO", "Collecting list of repositories/images from source registry.")
             resp = http.request("GET", "https://{src}/v1/search".format(src=self.src_url))
             if resp.data:
                 data = json.loads(resp.data.decode('utf-8'))
+                self._log("DEBUG", "List of images: {images}".format(images=data))
                 for i in data.get('results'):
                     self.image_list.append(i.get('name').replace('library/', ''))
             
@@ -68,7 +69,7 @@ class DIM:
                     self._pull_push_image(image, tag)
 
         except Exception as e:
-            self._log("ERROR", "Error occurred: {error}".format(error=e))
+            self._log("ERROR", "Error occurred: {error}".format(error=str(e).split("\r\n")))
             raise
 
     def _pull_push_image(self, image, tag):
@@ -77,6 +78,8 @@ class DIM:
         push to V2 repository or AWS ECR. Once image successfuly pushed to new repository 
         method will remove images with tag from local machine.
         TODO: Update method with failover mechanism.
+        TODO: Update method with proper dest url check. In case of AWS ECR self.dest_url have
+        full path (repository with image name).
         :image: string Image name.
         :tag: string Tag id to pull/push.
         :return: bool
@@ -88,21 +91,20 @@ class DIM:
             if self.IS_AWS_ECR:
                 self._create_ecr_repo(image)
 
-            self._log("DEBUG", "Pulling image {src}/{image}:{tag}".format(
+            self._log("INFO", "Pulling image {src}/{image}:{tag}".format(
                 src=self.src_url, image=image, tag=tag
             ))
             img = client.pull("{src}/{image}:{tag}".format(
                 src=self.src_url, image=image, tag=tag
             ))
             if img:
-                updated_image = client.tag("{src}/{image}".format(src=self.src_url, image=image), 
-                                           "{dest}/{image}".format(dest=self.dest_url,
-                                                                   image=image), tag)
+                updated_image = client.tag("{src}/{image}".format(src=self.src_url, image=image),
+                                           "{dest}".format(dest=self.dest_url), tag)
+                self._log("DEBUG", "Updated image: {image}".format(image=updated_image))
                 if updated_image:
                     try:
-                        push_result = client.push("{dest}/{image}".format(dest=self.dest_url,
-                                                                          image=image),
-                                                  tag=tag, insecure_registry=True)
+                        push_result = client.push("{dest}".format(dest=self.dest_url),
+                                                  tag=tag)
                         pr = self._check_docker_client_output(push_result)
                         for key in pr:
                             if key.get("error"):
@@ -112,13 +114,13 @@ class DIM:
 
                         client.remove_image("{src}/{image}:{tag}".format(
                             src=self.src_url, image=image, tag=tag))
-                        client.remove_image("{dest}/{image}:{tag}".format(
-                            dest=self.dest_url, image=image, tag=tag))
-                        self._log("DEBUG", "Image {image} pushed to {dest} successfuly".format(
-                            image=image, dest=self.dest_url
+                        client.remove_image("{dest}:{tag}".format(
+                            dest=self.dest_url, tag=tag))
+                        self._log("INFO", "Image {dest} pushed successfuly".format(
+                            dest=self.dest_url
                         ))
-                        self._log("DEBUG", "Images {src}/{image}:{tag} and {dest}/"
-                                           "{image}:{tag} removed successfuly".format(
+                        self._log("INFO", "Images {src}/{image}:{tag} and {dest}/"
+                                           ":{tag} removed successfuly".format(
                             src=self.src_url, dest=self.dest_url, image=image, tag=tag
                         ))
                         return True
@@ -126,7 +128,8 @@ class DIM:
                         self._log("ERROR", "Error: {error}".format(error=e))
                         return False
         except ImportError as e:
-            self._log("ERROR", "Cannot import module. {error}".format(error=e))
+            self._log("ERROR", "Cannot import module. {error}".format(error=str(e.msg).split(
+                "\r\n")))
             raise
 
     def _get_image_tags(self, image):
@@ -143,7 +146,7 @@ class DIM:
                 data = json.loads((resp.data).decode('utf-8'))
                 return data
         except Exception as e:
-            self._log("ERROR", "Error occurred: {error}".format(error=e))
+            self._log("ERROR", "Error occurred: {error}".format(error=str(e).split("\r\n")))
             raise
 
     def _create_ecr_repo(self, image):
@@ -155,11 +158,34 @@ class DIM:
         try:
             from python_terraform import Terraform
             terraform = Terraform()
-            return_code, stdout, stderr = terraform.apply(var={"aws_ecr_name": image})
-            print(return_code)
 
+            self._log("INFO", "Running terraform plan to get all in place.")
+            pl_ret_code, pl_sto, pl_ste = terraform.plan(var={"aws_ecr_name": image})
+            self._log("DEBUG", "Terraform plan status code. {ret_code}".format(ret_code=str(
+                pl_ret_code)))
+            # Exit code 2: Succeeded with non-empty diff (changes present)
+            # https://www.terraform.io/docs/commands/plan.html#detailed-exitcode
+            if pl_ret_code != 0 and pl_ret_code != 2:
+                self._log("ERROR", "Problem with Terraform plan. {error}".format(error=str(
+                    pl_ste.split("\r\n"))))
+
+            self._log("INFO", "Running terraform apply with repository name: {image}".format(
+                image=image))
+            ap_ret_code, ap_sto, ap_ste = terraform.apply(var={"aws_ecr_name": image},
+                                                          input=True, lock=False)
+            if ap_ret_code != 0:
+                self._log("ERROR", "Problem occurred while running terraform apply. {error}".format(
+                    error=str(ap_ste.split("\r\n"))
+                ))
+
+            self._log("INFO", "Getting terraform output with repository url")
+            registry_url = terraform.output("registry_url")
+            self._log("INFO", "Terraform output value: {value}".format(value=registry_url))
+            self._log("INFO", "New destination url ({dest}) for image {image}.".format(
+                dest=registry_url, image=image))
+            self.dest_url = registry_url
         except ImportError as e:
-            self._log("ERROR", "Import occured: {error}".format(error=e))
+            self._log("ERROR", "Import occurred: {error}".format(error=str(e.msg).split("\r\n")))
             self._log("ERROR", "Try to install/reinstall python_terraform module.")
             raise
 
@@ -184,20 +210,21 @@ class DIM:
     @staticmethod
     def _log(type, msg):
         """
-        Simple implementaiton of logging.
+        Simple implementation of logging.
         :type: string Log level
         :msg: string Message to output
         """
+        current_time = datetime.now()
         try:
             from inspect import currentframe, getframeinfo
 
-            current_time = datetime.now()
             current_frame = currentframe()
             log_string = "[{:%Y-%m-%d %H:%M:%S}][{type}][{lineno}] - {msg}".format(
                 current_time, type=type, msg=msg, lineno=current_frame.f_back.f_lineno)
             print(log_string)
         except ImportError as e:
-            print("[CRITICAL] Cannot import inspect module: {error}".format(error=e))
+            print("[{:%Y-%m-%d %H:%M:%S}][CRITICAL] Cannot import inspect module: {error}".format(
+                current_time, error=e))
             raise
 
 
